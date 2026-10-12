@@ -1,0 +1,1 @@
+g++ genetic.cpp -o genetic

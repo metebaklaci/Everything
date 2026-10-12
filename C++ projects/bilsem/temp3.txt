@@ -1,0 +1,2649 @@
+//TODO: MAJOR TODO: Test XOR thoroughly
+
+#ifndef AGENT_H
+#define AGENT_H
+
+#include <bits/stdc++.h>
+#include <fstream>
+
+using namespace std;
+
+struct node_value_pair{
+
+    int id;
+    double value;
+
+    node_value_pair(){}
+
+    node_value_pair(
+        int _id,
+        double _value
+    ){
+        id = _id;
+        value = _value;
+    }
+};
+
+struct ConnectionInnovation{
+
+    int in;
+    int out;
+
+    int innovation_id;
+
+    ConnectionInnovation(
+        int _in,
+        int _out,
+        int _innovation_id
+    ){
+        in = _in;
+        out = _out;
+        innovation_id = _innovation_id;
+    }
+};
+
+struct NodeSplitInnovation{
+
+    int split_cnctn_id;
+
+    int innovation_id;
+
+    int new_cnctn_1;
+    int new_cnctn_2;
+
+    NodeSplitInnovation(
+        int _split_cnctn_id,
+        int _innovation_id,
+        int _new_cnctn_1,
+        int _new_cnctn_2
+    ){
+        split_cnctn_id = _split_cnctn_id;
+
+        innovation_id = _innovation_id;
+
+        new_cnctn_1 = _new_cnctn_1;
+        new_cnctn_2 = _new_cnctn_2;
+    }
+};
+
+class Graph{
+
+public:
+
+    class Node{
+
+    public:
+
+        int id = 0;
+
+        char type = 'h';
+
+        int depth = 0;
+
+        double bias = 0;
+
+        char activation = 'l';
+
+        Node(){}
+
+        Node(
+            int _id,
+            char _type,
+            int _depth,
+            double _bias,
+            char _activation
+        ){
+            id = _id;
+            type = _type;
+            depth = _depth;
+            bias = _bias;
+            activation = _activation;
+        }
+    };
+
+    class Connection{
+
+    public:
+
+        int id = 0;
+
+        int nodein = 0;
+        int nodeout = 0;
+
+        double weight = 0;
+
+        bool enabled = true;
+
+        Connection(){}
+
+        Connection(
+            int _id,
+            int _nodein,
+            int _nodeout,
+            double _weight,
+            bool _enabled
+        ){
+            id = _id;
+
+            nodein = _nodein;
+            nodeout = _nodeout;
+
+            weight = _weight;
+
+            enabled = _enabled;
+        }
+    };
+
+    struct RuntimeConnection{
+
+        int in_index;
+        int out_index;
+
+        double weight;
+    };
+
+public:
+
+    vector<Node> nodes = {};
+
+    vector<Connection> connections = {};
+
+    unordered_map<int,int> node_id_to_index = {};
+
+    unordered_map<int,int> connection_id_to_index = {};
+
+    unordered_map<int, vector<int>> incoming_connections = {};
+
+    unordered_map<int, vector<int>> outgoing_connections = {};
+
+    unordered_set<long long> edge_lookup = {};
+
+    vector<int> topo_order = {};
+
+    vector<RuntimeConnection> runtime_connections = {};
+
+    mt19937 rng;
+
+private:
+
+    bool dirty = true;
+
+public:
+
+    Graph(){
+        updateRng();
+    }
+
+    Graph(
+        vector<Node> _nodes,
+        vector<Connection> _connections
+    ){
+
+        nodes = _nodes;
+
+        connections = _connections;
+
+        updateRng();
+
+        initializeStructures();
+
+        recompile();
+    }
+
+public:
+
+    void updateRng(){
+
+        random_device rd;
+
+        rng.seed(rd());
+    }
+
+private:
+
+    long long edgeKey(
+        int in,
+        int out
+    ) const{
+
+        return (
+            (static_cast<long long>(in) << 32)
+            |
+            static_cast<unsigned int>(out)
+        );
+    }
+
+    void registerNode(int index){
+
+        node_id_to_index[
+            nodes[index].id
+        ] = index;
+    }
+
+    void registerConnection(int index){
+
+        connection_id_to_index[
+            connections[index].id
+        ] = index;
+
+        incoming_connections[
+            connections[index].nodeout
+        ].push_back(index);
+
+        outgoing_connections[
+            connections[index].nodein
+        ].push_back(index);
+
+        edge_lookup.insert(
+            edgeKey(
+                connections[index].nodein,
+                connections[index].nodeout
+            )
+        );
+    }
+
+    void initializeStructures(){
+
+        node_id_to_index.clear();
+
+        connection_id_to_index.clear();
+
+        incoming_connections.clear();
+
+        outgoing_connections.clear();
+
+        edge_lookup.clear();
+
+        for(int i = 0; i < nodes.size(); ++i){
+
+            registerNode(i);
+        }
+
+        for(int i = 0; i < connections.size(); ++i){
+
+            registerConnection(i);
+        }
+    }
+
+private:
+
+    static double activate(
+        double x,
+        char activation
+    ){
+
+        switch(activation){
+
+            case 's':
+                return
+                    1.0
+                    /
+                    (
+                        1.0
+                        +
+                        exp(-x)
+                    );
+
+            case 't':
+                return tanh(x);
+
+            case 'r':
+                return max(0.0, x);
+
+            case 'l':
+                return
+                    (x > 0.0)
+                    ? x
+                    : 0.01 * x;
+
+            case 'x':
+            default:
+                return x;
+        }
+    }
+
+public:
+
+    void markDirty(){
+        dirty = true;
+    }
+
+public:
+
+    vector<node_value_pair> compute(
+        const vector<node_value_pair>& inputs
+    ){
+
+        if(dirty){
+
+            recompile();
+        }
+
+        vector<double> values(
+            nodes.size(),
+            0.0
+        );
+
+        // Set inputs
+
+        for(const auto& in : inputs){
+
+            values[
+                node_id_to_index[in.id]
+            ] = in.value;
+        }
+
+        // Feedforward evaluation
+
+        for(int node_index : topo_order){
+
+            Node& n = nodes[node_index];
+
+            if(n.type == 'i')
+                continue;
+
+            double sum = n.bias;
+
+            for(int conn_index :
+                incoming_connections[n.id]
+            ){
+
+                Connection& c =
+                    connections[conn_index];
+
+                if(!c.enabled)
+                    continue;
+
+                int in_idx =
+                    node_id_to_index[c.nodein];
+
+                sum +=
+                    values[in_idx]
+                    *
+                    c.weight;
+            }
+
+            values[node_index] =
+                activate(
+                    sum,
+                    n.activation
+                );
+        }
+
+        vector<node_value_pair> outputs;
+
+        for(int i = 0; i < nodes.size(); ++i){
+
+            if(nodes[i].type == 'o'){
+
+                outputs.push_back({
+
+                    nodes[i].id,
+
+                    values[i]
+                });
+            }
+        }
+
+        return outputs;
+    }
+
+public:
+
+    void perturbWeights(
+        double mutation_chance,
+        double reset_probability,
+        double mutation_std_dev,
+        double reset_lower,
+        double reset_upper
+    ){
+
+        uniform_real_distribution<double>
+        prob(0,1);
+
+        normal_distribution<double>
+        perturb(
+            0,
+            mutation_std_dev
+        );
+
+        uniform_real_distribution<double>
+        reset(
+            reset_lower,
+            reset_upper
+        );
+
+        for(Connection& c :
+            connections
+        ){
+
+            if(prob(rng) >
+                mutation_chance
+            ){
+                continue;
+            }
+
+            if(
+                prob(rng)
+                <
+                reset_probability
+            ){
+
+                c.weight =
+                    reset(rng);
+            }
+            else{
+
+                c.weight +=
+                    perturb(rng);
+            }
+        }
+
+        markDirty();
+    }
+
+    void perturbBiases(
+        double mutation_chance,
+        double reset_probability,
+        double mutation_std_dev,
+        double reset_lower,
+        double reset_upper
+    ){
+
+        uniform_real_distribution<double>
+        prob(0,1);
+
+        normal_distribution<double>
+        perturb(
+            0,
+            mutation_std_dev
+        );
+
+        uniform_real_distribution<double>
+        reset(
+            reset_lower,
+            reset_upper
+        );
+
+        for(Node& n : nodes){
+
+            if(n.type == 'i')
+                continue;
+
+            if(
+                prob(rng)
+                >
+                mutation_chance
+            ){
+                continue;
+            }
+
+            if(
+                prob(rng)
+                <
+                reset_probability
+            ){
+
+                n.bias =
+                    reset(rng);
+            }
+            else{
+
+                n.bias +=
+                    perturb(rng);
+            }
+        }
+
+        markDirty();
+    }
+
+    private:
+
+    bool rebuildTopology(){
+
+        topo_order.clear();
+
+        unordered_map<int,int> indegree;
+
+        for(const Node& n : nodes){
+
+            indegree[n.id] = 0;
+        }
+
+        for(const Connection& c : connections){
+
+            if(!c.enabled)
+                continue;
+
+            indegree[c.nodeout]++;
+        }
+
+        queue<int> q;
+
+        for(const Node& n : nodes){
+
+            if(indegree[n.id] == 0){
+
+                q.push(n.id);
+            }
+        }
+
+        unordered_map<int,int> depth_map;
+
+        for(const Node& n : nodes){
+
+            depth_map[n.id] = 0;
+        }
+
+        int processed = 0;
+
+        while(!q.empty()){
+
+            int current = q.front();
+
+            q.pop();
+
+            processed++;
+
+            topo_order.push_back(
+                node_id_to_index[current]
+            );
+
+            for(int conn_index :
+                outgoing_connections[current]
+            ){
+
+                Connection& c =
+                    connections[conn_index];
+
+                if(!c.enabled)
+                    continue;
+
+                depth_map[c.nodeout] =
+                    max(
+                        depth_map[c.nodeout],
+                        depth_map[current] + 1
+                    );
+
+                indegree[c.nodeout]--;
+
+                if(indegree[c.nodeout] == 0){
+
+                    q.push(c.nodeout);
+                }
+            }
+        }
+
+        if(processed != nodes.size()){
+
+            return false;
+        }
+
+        for(Node& n : nodes){
+
+            n.depth = depth_map[n.id];
+        }
+
+        runtime_connections.clear();
+
+        for(const Connection& c :
+            connections
+        ){
+
+            if(!c.enabled)
+                continue;
+
+            runtime_connections.push_back({
+
+                node_id_to_index[c.nodein],
+
+                node_id_to_index[c.nodeout],
+
+                c.weight
+            });
+        }
+
+        dirty = false;
+
+        return true;
+    }
+
+    public:
+    void recompile(){
+
+        if(!rebuildTopology()){
+
+            printTopology();
+            throw runtime_error(
+                "Cyclic graph"
+            );
+        }
+    }
+
+    bool tryRecompile(){
+
+        return rebuildTopology();
+    }
+
+    void mutateEnableDisable(
+        double disable_prob,
+        double enable_prob
+    ){
+
+        uniform_real_distribution<double>
+        prob(0,1);
+
+        for(Connection& c :
+            connections
+        ){
+
+            bool old_state =
+                c.enabled;
+
+            if(c.enabled){
+
+                if(
+                    prob(rng)
+                    <
+                    disable_prob
+                ){
+
+                    c.enabled = false;
+                }
+            }
+            else{
+
+                if(
+                    prob(rng)
+                    <
+                    enable_prob
+                ){
+
+                    c.enabled = true;
+                }
+            }
+
+            markDirty();
+
+            if(!tryRecompile()){
+
+                c.enabled =
+                    old_state;
+
+                recompile();
+            }
+        }
+    }
+
+public:
+    bool pathExists(
+        int start,
+        int target
+    ){
+
+        queue<int> q;
+
+        unordered_set<int> visited;
+
+        q.push(start);
+
+        visited.insert(start);
+
+        while(!q.empty()){
+
+            int cur = q.front();
+
+            q.pop();
+
+            if(cur == target)
+                return true;
+
+            for(int conn_index :
+                outgoing_connections[cur]
+            ){
+
+                Connection& c =
+                    connections[conn_index];
+
+                //if(!c.enabled) continue; //PROBLEMATIC
+
+                int nxt = c.nodeout;
+
+                if(!visited.count(nxt)){
+
+                    visited.insert(nxt);
+
+                    q.push(nxt);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    void randConnection(
+        int& connection_inno_number,
+        vector<ConnectionInnovation>* lookup
+    ){
+
+        vector<pair<int,int>>
+        candidates;
+
+        for(const Node& n1 :
+            nodes
+        ){
+
+            for(const Node& n2 :
+                nodes
+            ){
+
+                if(n1.id == n2.id)
+                    continue;
+
+                if(n1.type == 'o')
+                    continue;
+
+                if(n2.type == 'i')
+                    continue;
+
+                if(pathExists(n2.id, n1.id))
+                    continue;
+
+                if(
+                    edge_lookup.count(
+                        edgeKey(
+                            n1.id,
+                            n2.id
+                        )
+                    )
+                ){
+                    continue;
+                }
+
+                candidates.push_back({
+
+                    n1.id,
+
+                    n2.id
+                });
+            }
+        }
+
+        if(candidates.empty())
+            return;
+
+        uniform_int_distribution<int>
+        dist(
+            0,
+            candidates.size() - 1
+        );
+
+        pair<int,int> selected =
+            candidates[dist(rng)];
+
+        int found = -1;
+
+        for(
+            const ConnectionInnovation& i :
+            *lookup
+        ){
+
+            if(
+                i.in
+                ==
+                selected.first
+                &&
+                i.out
+                ==
+                selected.second
+            ){
+
+                found =
+                    i.innovation_id;
+
+                break;
+            }
+        }
+
+        normal_distribution<double>
+        init(0,1);
+
+        double w = init(rng);
+
+        if(found == -1){
+
+            connection_inno_number++;
+
+            connections.push_back(
+                Connection(
+                    connection_inno_number,
+                    selected.first,
+                    selected.second,
+                    w,
+                    true
+                )
+            );
+
+            registerConnection(
+                connections.size() - 1
+            );
+
+            lookup->push_back(
+                ConnectionInnovation(
+                    selected.first,
+                    selected.second,
+                    connection_inno_number
+                )
+            );
+        }
+        else{
+
+            connections.push_back(
+                Connection(
+                    found,
+                    selected.first,
+                    selected.second,
+                    w,
+                    true
+                )
+            );
+
+            registerConnection(
+                connections.size() - 1
+            );
+        }
+
+        markDirty();
+
+        if(!tryRecompile()){
+
+            int last =
+                connections.size() - 1;
+
+            edge_lookup.erase(
+                edgeKey(
+                    connections[last].nodein,
+                    connections[last].nodeout
+                )
+            );
+
+            incoming_connections[
+                connections[last].nodeout
+            ].pop_back();
+
+            outgoing_connections[
+                connections[last].nodein
+            ].pop_back();
+
+            connection_id_to_index.erase(
+                connections[last].id
+            );
+
+            connections.pop_back();
+
+            recompile();
+        }
+    }
+
+public:
+
+    void insertNode(
+        int& node_inno_number,
+        int& connection_inno_number,
+        vector<NodeSplitInnovation>* lookup
+    ){
+
+        vector<int> enabled;
+
+        for(
+            int i = 0;
+            i < connections.size();
+            ++i
+        ){
+
+            if(connections[i].enabled){
+
+                enabled.push_back(i);
+            }
+        }
+
+        if(enabled.empty())
+            return;
+
+        uniform_int_distribution<int>
+        dist(
+            0,
+            enabled.size() - 1
+        );
+
+        int conn_index =
+            enabled[dist(rng)];
+
+        Connection old =
+            connections[conn_index];
+
+        connections[conn_index]
+            .enabled = false;
+
+        int found_node = -1;
+
+        int found_c1 = -1;
+        int found_c2 = -1;
+
+        for(
+            const NodeSplitInnovation& n :
+            *lookup
+        ){
+
+            if(
+                n.split_cnctn_id
+                ==
+                old.id
+            ){
+
+                found_node =
+                    n.innovation_id;
+
+                found_c1 =
+                    n.new_cnctn_1;
+
+                found_c2 =
+                    n.new_cnctn_2;
+
+                break;
+            }
+        }
+
+        int new_node_id;
+
+        int c1;
+        int c2;
+
+        if(found_node == -1){
+
+            node_inno_number++;
+
+            connection_inno_number++;
+
+            c1 =
+                connection_inno_number;
+
+            connection_inno_number++;
+
+            c2 =
+                connection_inno_number;
+
+            new_node_id =
+                node_inno_number;
+
+            lookup->push_back(
+                NodeSplitInnovation(
+                    old.id,
+                    new_node_id,
+                    c1,
+                    c2
+                )
+            );
+        }
+        else{
+
+            new_node_id =
+                found_node;
+
+            c1 = found_c1;
+            c2 = found_c2;
+        }
+
+        nodes.push_back(
+            Node(
+                new_node_id,
+                'h',
+                nodes[
+                    node_id_to_index[
+                        old.nodein
+                    ]
+                ].depth + 1,
+                0,
+                't' // changed from leaky relu
+            )
+        );
+
+        registerNode(
+            nodes.size() - 1
+        );
+
+        connections.push_back(
+            Connection(
+                c1,
+                old.nodein,
+                new_node_id,
+                1.0,
+                true
+            )
+        );
+
+        registerConnection(
+            connections.size() - 1
+        );
+
+        connections.push_back(
+            Connection(
+                c2,
+                new_node_id,
+                old.nodeout,
+                old.weight,
+                true
+            )
+        );
+
+        registerConnection(
+            connections.size() - 1
+        );
+
+        markDirty();
+    }
+
+public:
+
+    void initialize_he(){
+
+        int fan_in = 0;
+
+        for(Node& n : nodes){
+
+            if(n.type == 'i')
+                fan_in++;
+        }
+
+        fan_in = max(1, fan_in);
+
+        normal_distribution<double>
+        dist(
+            0,
+            sqrt(2.0 / fan_in)
+        );
+
+        for(Connection& c :
+            connections
+        ){
+
+            c.weight = dist(rng);
+        }
+
+        for(Node& n :
+            nodes
+        ){
+
+            if(n.type != 'i'){
+
+                n.bias = 0;
+            }
+        }
+
+        markDirty();
+    }
+
+    void printTopology(){
+
+        cout << "\n";
+
+        cout
+            << "Topology of agent:\n";
+
+        cout
+            << "Nodes: "
+            << nodes.size()
+            << "\n";
+
+        cout
+            << "Connections: "
+            << connections.size()
+            << "\n\n";
+
+        cout
+            << "Nodes:\n";
+
+        for(const auto& n : nodes){
+            cout 
+                << "ID " << n.id << " : "
+                << "Type " << n.type << " | "
+                << "Activation function " << n.activation << " | "
+                << "Bias " << n.bias << "\n";
+        }
+
+        cout
+            << "Connections:\n";
+        
+        for(const auto& c : connections){
+            cout
+                << "ID "
+                << c.id
+                << " : "
+                << c.nodein
+                << " -> "
+                << c.nodeout
+                << " | Weight "
+                << c.weight
+                << " | Enabled? "
+                << c.enabled
+                << "\n";
+        }
+    }
+
+};
+
+struct Species{
+
+    int representative = -1;
+
+    vector<int> members = {};
+
+    double adjusted_fitness = 0;
+
+    double best_fitness = -1e18;
+
+    int stagnation_age = 0;
+};
+
+class Population{
+
+public:
+
+    vector<Graph> agents = {};
+
+    mt19937 rng;
+
+    int node_inno_number = 0;
+
+    int connection_inno_number = 0;
+
+    vector<ConnectionInnovation>
+    connection_inno_lookup = {};
+
+    vector<NodeSplitInnovation>
+    node_inno_lookup = {};
+
+    vector<Species> species = {};
+
+public:
+
+    Population(){}
+
+    Population(
+        vector<Graph> _agents,
+        int node_inno,
+        int connection_inno
+    ){
+
+        agents = _agents;
+
+        node_inno_number =
+            node_inno;
+
+        connection_inno_number =
+            connection_inno;
+
+        updateRng();
+    }
+
+public:
+
+    void updateRng(){
+
+        random_device rd;
+
+        rng.seed(rd());
+    }
+
+private:
+
+    double weight_mutation_chance = 0.8;
+
+    double bias_mutation_chance = 0.3;
+
+    double reset_probability = 0.1;
+
+    double mutation_std_dev = 0.1;
+
+    double reset_lower = -1;
+
+    double reset_upper = 1;
+
+    double add_connection_prob = 0.05;
+
+    double add_node_prob = 0.03;
+
+    double disable_prob = 0.01;
+
+    double enable_prob = 0.002;
+
+public:
+
+    void finalizeAgent(int index){
+
+        agents[index].recompile();
+    }
+
+    void finalizePopulation(){
+
+        for(Graph& g : agents){
+
+            g.recompile();
+        }
+    }
+
+public:
+
+    void randMutate(int index){
+
+        uniform_real_distribution<double>
+        prob(0,1);
+
+        agents[index].perturbWeights(
+            weight_mutation_chance,
+            reset_probability,
+            mutation_std_dev,
+            reset_lower,
+            reset_upper
+        );
+
+        agents[index].perturbBiases(
+            bias_mutation_chance,
+            reset_probability,
+            mutation_std_dev,
+            reset_lower,
+            reset_upper
+        );
+
+        if(
+            prob(rng)
+            <
+            add_connection_prob
+        ){
+
+            agents[index].randConnection(
+                connection_inno_number,
+                &connection_inno_lookup
+            );
+        }
+
+        if(
+            prob(rng)
+            <
+            add_node_prob
+        ){
+
+            agents[index].insertNode(
+                node_inno_number,
+                connection_inno_number,
+                &node_inno_lookup
+            );
+        }
+
+        agents[index].mutateEnableDisable(
+            disable_prob,
+            enable_prob
+        );
+
+        agents[index].recompile();
+    }
+
+public:
+
+    void initialize_he(){
+
+        for(Graph& g : agents){
+
+            g.initialize_he();
+
+            g.recompile();
+        }
+    }
+
+public:
+
+    Graph crossover(
+        int index1,
+        double fitness1,
+        int index2,
+        double fitness2
+    ){
+
+        int fitindex;
+        int unfitindex;
+
+        if(fitness1 >= fitness2){
+
+            fitindex = index1;
+
+            unfitindex = index2;
+        }
+        else{
+
+            fitindex = index2;
+
+            unfitindex = index1;
+        }
+
+        Graph& fit_parent =
+            agents[fitindex];
+
+        Graph& unfit_parent =
+            agents[unfitindex];
+
+        unordered_map<int, Graph::Node>
+        fit_nodes;
+
+        unordered_map<int, Graph::Node>
+        unfit_nodes;
+
+        unordered_map<
+            int,
+            Graph::Connection
+        > fit_connections;
+
+        unordered_map<
+            int,
+            Graph::Connection
+        > unfit_connections;
+
+        for(
+            const Graph::Node& n :
+            fit_parent.nodes
+        ){
+
+            fit_nodes[n.id] = n;
+        }
+
+        for(
+            const Graph::Node& n :
+            unfit_parent.nodes
+        ){
+
+            unfit_nodes[n.id] = n;
+        }
+
+        for(
+            const Graph::Connection& c :
+            fit_parent.connections
+        ){
+
+            fit_connections[c.id] = c;
+        }
+
+        for(
+            const Graph::Connection& c :
+            unfit_parent.connections
+        ){
+
+            unfit_connections[c.id] = c;
+        }
+
+        vector<Graph::Connection>
+        child_connections;
+
+        uniform_real_distribution<double>
+        prob(0.0, 1.0);
+
+        vector<int> innovations;
+
+        for(
+            const auto& pair :
+            fit_connections
+        ){
+
+            innovations.push_back(
+                pair.first
+            );
+        }
+
+        sort(
+            innovations.begin(),
+            innovations.end()
+        );
+
+        for(int innovation :
+            innovations
+        ){
+
+            bool in_unfit =
+                unfit_connections.count(
+                    innovation
+                );
+
+            Graph::Connection chosen;
+
+            if(in_unfit){
+
+                if(prob(rng) < 0.5){
+
+                    chosen =
+                        fit_connections[
+                            innovation
+                        ];
+                }
+                else{
+
+                    chosen =
+                        unfit_connections[
+                            innovation
+                        ];
+                }
+
+                bool enabled_fit =
+                    fit_connections[
+                        innovation
+                    ].enabled;
+
+                bool enabled_unfit =
+                    unfit_connections[
+                        innovation
+                    ].enabled;
+
+                if(
+                    !enabled_fit
+                    ||
+                    !enabled_unfit
+                ){
+
+                    chosen.enabled =
+                        (
+                            prob(rng)
+                            >=
+                            0.75
+                        );
+                }
+            }
+            else{
+
+                chosen =
+                    fit_connections[
+                        innovation
+                    ];
+            }
+
+            child_connections.push_back(
+                chosen
+            );
+        }
+
+        unordered_set<int>
+        required_nodes;
+
+        for(
+            const auto& c :
+            child_connections
+        ){
+
+            required_nodes.insert(
+                c.nodein
+            );
+
+            required_nodes.insert(
+                c.nodeout
+            );
+        }
+
+        vector<Graph::Node>
+        child_nodes;
+
+        for(int node_id :
+            required_nodes
+        ){
+
+            bool in_fit =
+                fit_nodes.count(
+                    node_id
+                );
+
+            bool in_unfit =
+                unfit_nodes.count(
+                    node_id
+                );
+
+            Graph::Node chosen;
+
+            if(
+                in_fit
+                &&
+                in_unfit
+            ){
+
+                if(prob(rng) < 0.5){
+
+                    chosen =
+                        fit_nodes[node_id];
+                }
+                else{
+
+                    chosen =
+                        unfit_nodes[node_id];
+                }
+            }
+            else if(in_fit){
+
+                chosen =
+                    fit_nodes[node_id];
+            }
+            else{
+
+                chosen =
+                    unfit_nodes[node_id];
+            }
+
+            child_nodes.push_back(
+                chosen
+            );
+        }
+
+        Graph child(
+            child_nodes,
+            child_connections
+        );
+
+        return child;
+    }
+
+public:
+
+    double compatibilityDistance(
+        const Graph& g1,
+        const Graph& g2
+    ){
+
+        unordered_map<int,double>
+        g1_weights;
+
+        unordered_map<int,double>
+        g2_weights;
+
+        unordered_set<int>
+        all_innovations;
+
+        int max1 = 0;
+        int max2 = 0;
+
+        for(const auto& c :
+            g1.connections
+        ){
+
+            g1_weights[c.id] =
+                c.weight;
+
+            all_innovations.insert(
+                c.id
+            );
+
+            max1 =
+                max(max1, c.id);
+        }
+
+        for(const auto& c :
+            g2.connections
+        ){
+
+            g2_weights[c.id] =
+                c.weight;
+
+            all_innovations.insert(
+                c.id
+            );
+
+            max2 =
+                max(max2, c.id);
+        }
+
+        int matching = 0;
+
+        int disjoint = 0;
+
+        int excess = 0;
+
+        double weight_diff = 0;
+
+        for(int innovation :
+            all_innovations
+        ){
+
+            bool in1 =
+                g1_weights.count(
+                    innovation
+                );
+
+            bool in2 =
+                g2_weights.count(
+                    innovation
+                );
+
+            if(in1 && in2){
+
+                matching++;
+
+                weight_diff += abs(
+
+                    g1_weights[
+                        innovation
+                    ]
+                    -
+                    g2_weights[
+                        innovation
+                    ]
+                );
+            }
+            else{
+
+                if(
+                    (
+                        in1
+                        &&
+                        innovation > max2
+                    )
+                    ||
+                    (
+                        in2
+                        &&
+                        innovation > max1
+                    )
+                ){
+
+                    excess++;
+                }
+                else{
+
+                    disjoint++;
+                }
+            }
+        }
+
+        double avg_weight_diff = 0;
+
+        if(matching > 0){
+
+            avg_weight_diff =
+                weight_diff
+                /
+                matching;
+        }
+
+        int N = max(
+            g1.connections.size(),
+            g2.connections.size()
+        );
+
+        if(N < 20)
+            N = 1;
+
+        double c1 = 1.0;
+        double c2 = 1.0;
+        double c3 = 0.4;
+
+        return
+            (
+                c1 * excess / N
+            )
+            +
+            (
+                c2 * disjoint / N
+            )
+            +
+            (
+                c3 * avg_weight_diff
+            );
+    }
+
+public:
+
+    void speciate(double threshold){
+
+        for(auto& s : species){
+
+            if(s.members.empty())
+                continue;
+
+            uniform_int_distribution<int>
+            dist(
+                0,
+                s.members.size() - 1
+            );
+
+            s.representative =
+                s.members[dist(rng)];
+
+            s.members.clear();
+        }
+
+        for(
+            int i = 0;
+            i < agents.size();
+            ++i
+        ){
+
+            bool assigned = false;
+
+            for(auto& s : species){
+
+                double distance =
+                    compatibilityDistance(
+                        agents[i],
+                        agents[
+                            s.representative
+                        ]
+                    );
+
+                if(distance < threshold){
+
+                    s.members.push_back(i);
+
+                    assigned = true;
+
+                    break;
+                }
+            }
+
+            if(!assigned){
+
+                Species s;
+
+                s.representative = i;
+
+                s.members.push_back(i);
+
+                species.push_back(s);
+            }
+        }
+
+        vector<Species> filtered;
+
+        for(auto& s : species){
+
+            if(!s.members.empty()){
+
+                filtered.push_back(s);
+            }
+        }
+
+        species = filtered;
+    }
+
+public:
+
+    vector<double> adjustedFitnesses(
+        const vector<double>& raw_fitnesses
+    ){
+
+        vector<double> adjusted(
+            agents.size(),
+            0
+        );
+
+        for(const auto& s :
+            species
+        ){
+
+            for(int member :
+                s.members
+            ){
+
+                adjusted[member] =
+                    raw_fitnesses[
+                        member
+                    ]
+                    /
+                    s.members.size();
+            }
+        }
+
+        return adjusted;
+    }
+
+public:
+
+    int rouletteSelect(
+        const vector<int>& candidates,
+        const vector<double>& fitnesses
+    ){
+
+        double total = 0.0;
+
+        for(int i : candidates){
+
+            total += max(
+                0.0,
+                fitnesses[i]
+            );
+        }
+
+        if(total <= 0.0){
+
+            uniform_int_distribution<int>
+            dist(
+                0,
+                candidates.size() - 1
+            );
+
+            return candidates[
+                dist(rng)
+            ];
+        }
+
+        uniform_real_distribution<double>
+        dist(0, total);
+
+        double r = dist(rng);
+
+        double accum = 0.0;
+
+        for(int i : candidates){
+
+            accum += max(
+                0.0,
+                fitnesses[i]
+            );
+
+            if(accum >= r)
+                return i;
+        }
+
+        return candidates.back();
+    }
+
+public:
+
+    void evolve(
+        const vector<double>& raw_fitnesses
+    ){
+
+        speciate(1.5); //IMPORTANT: Speciation threshold determined here
+
+        int global_best = 0;
+
+        for(
+            int i = 1;
+            i < agents.size();
+            ++i
+        ){
+
+            if(
+                raw_fitnesses[i]
+                >
+                raw_fitnesses[
+                    global_best
+                ]
+            ){
+
+                global_best = i;
+            }
+        }
+
+        vector<Species>
+        surviving_species;
+
+        for(auto& s : species){
+
+            if(s.members.empty())
+                continue;
+
+            double species_best =
+                -1e18;
+
+            for(int m : s.members){
+
+                species_best = max(
+                    species_best,
+                    raw_fitnesses[m]
+                );
+            }
+
+            if(
+                species_best
+                >
+                s.best_fitness
+            ){
+
+                s.best_fitness =
+                    species_best;
+
+                s.stagnation_age = 0;
+            }
+            else{
+
+                s.stagnation_age++;
+            }
+
+            bool contains_global_best =
+                false;
+
+            for(int m : s.members){
+
+                if(m == global_best){
+
+                    contains_global_best =
+                        true;
+
+                    break;
+                }
+            }
+
+            if(
+                s.stagnation_age <= 15
+                ||
+                contains_global_best
+            ){
+
+                surviving_species.push_back(
+                    s
+                );
+            }
+        }
+
+        if(
+            surviving_species.empty()
+        ){
+
+            Species fallback;
+
+            fallback.representative =
+                global_best;
+
+            fallback.members.push_back(
+                global_best
+            );
+
+            fallback.best_fitness =
+                raw_fitnesses[
+                    global_best
+                ];
+
+            surviving_species.push_back(
+                fallback
+            );
+        }
+
+        species =
+            surviving_species;
+
+        vector<double> adjusted =
+            adjustedFitnesses(
+                raw_fitnesses
+            );
+
+        vector<double> species_fitness(
+            species.size(),
+            0.0
+        );
+
+        double total_species_fitness =
+            0.0;
+
+        for(
+            int i = 0;
+            i < species.size();
+            ++i
+        ){
+
+            for(
+                int member :
+                species[i].members
+            ){
+
+                species_fitness[i]
+                    +=
+                    adjusted[member];
+            }
+
+            species_fitness[i] =
+                max(
+                    0.0,
+                    species_fitness[i]
+                );
+
+            total_species_fitness
+                +=
+                species_fitness[i];
+        }
+
+        vector<int> offspring_counts(
+            species.size(),
+            0
+        );
+
+        int assigned = 0;
+
+        if(
+            total_species_fitness
+            <=
+            0.0
+        ){
+
+            for(
+                int i = 0;
+                i < species.size();
+                ++i
+            ){
+
+                offspring_counts[i] =
+                    agents.size()
+                    /
+                    species.size();
+            }
+        }
+        else{
+
+            for(
+                int i = 0;
+                i < species.size();
+                ++i
+            ){
+
+                double ratio =
+                    species_fitness[i]
+                    /
+                    total_species_fitness;
+
+                offspring_counts[i] =
+                    static_cast<int>(
+
+                        floor(
+                            ratio
+                            *
+                            agents.size()
+                        )
+                    );
+            }
+        }
+
+        for(int x :
+            offspring_counts
+        ){
+
+            assigned += x;
+        }
+
+        while(
+            assigned
+            <
+            agents.size()
+        ){
+
+            int best_species = 0;
+
+            for(
+                int i = 1;
+                i < species.size();
+                ++i
+            ){
+
+                if(
+                    species_fitness[i]
+                    >
+                    species_fitness[
+                        best_species
+                    ]
+                ){
+
+                    best_species = i;
+                }
+            }
+
+            offspring_counts[
+                best_species
+            ]++;
+
+            assigned++;
+        }
+
+        vector<Graph>
+        next_generation;
+
+        uniform_real_distribution<double>
+        prob(0,1);
+
+        for(
+            int s_idx = 0;
+            s_idx < species.size();
+            ++s_idx
+        ){
+
+            Species& s =
+                species[s_idx];
+
+            int offspring_target =
+                offspring_counts[s_idx];
+
+            if(
+                offspring_target <= 0
+                ||
+                s.members.empty()
+            ){
+
+                continue;
+            }
+
+            int best =
+                s.members[0];
+
+            for(int m : s.members){
+
+                if(
+                    raw_fitnesses[m]
+                    >
+                    raw_fitnesses[best]
+                ){
+
+                    best = m;
+                }
+            }
+
+            next_generation.push_back(
+                agents[best]
+            );
+
+            int children_to_generate =
+                offspring_target - 1;
+
+            for(
+                int child_i = 0;
+                child_i < children_to_generate;
+                ++child_i
+            ){
+
+                int p1 =
+                    rouletteSelect(
+                        s.members,
+                        adjusted
+                    );
+
+                int p2 =
+                    rouletteSelect(
+                        s.members,
+                        adjusted
+                    );
+
+                Graph child =
+                    crossover(
+                        p1,
+                        raw_fitnesses[p1],
+                        p2,
+                        raw_fitnesses[p2]
+                    );
+
+                if(!child.tryRecompile()){
+
+                    continue;
+                }
+
+                child.perturbWeights(
+                    weight_mutation_chance,
+                    reset_probability,
+                    mutation_std_dev,
+                    reset_lower,
+                    reset_upper
+                );
+
+                child.perturbBiases(
+                    bias_mutation_chance,
+                    reset_probability,
+                    mutation_std_dev,
+                    reset_lower,
+                    reset_upper
+                );
+
+                if(
+                    prob(rng)
+                    <
+                    add_connection_prob
+                ){
+
+                    child.randConnection(
+                        connection_inno_number,
+                        &connection_inno_lookup
+                    );
+
+                    if(!child.tryRecompile()){
+
+                        continue;
+                    }
+                }
+
+                if(
+                    prob(rng)
+                    <
+                    add_node_prob
+                ){
+
+                    child.insertNode(
+                        node_inno_number,
+                        connection_inno_number,
+                        &node_inno_lookup
+                    );
+
+                    if(!child.tryRecompile()){
+
+                        continue;
+                    }
+                }
+
+                child.mutateEnableDisable(
+                    disable_prob,
+                    enable_prob
+                );
+
+                if(!child.tryRecompile()){
+
+                    continue;
+                }
+
+                next_generation.push_back(
+                    child
+                );
+
+                if(
+                    next_generation.size()
+                    >=
+                    agents.size()
+                ){
+                    break;
+                }
+            }
+
+            if(
+                next_generation.size()
+                >=
+                agents.size()
+            ){
+                break;
+            }
+        }
+
+        while(
+            next_generation.size()
+            <
+            agents.size()
+        ){
+
+            next_generation.push_back(
+                agents[global_best]
+            );
+        }
+
+        while(
+            next_generation.size()
+            >
+            agents.size()
+        ){
+
+            next_generation.pop_back();
+        }
+
+        agents = next_generation;
+    }
+
+public:
+
+    void printPopulationDetailedToFile(
+        const vector<double>& fitnesses,
+        const string& filename,
+        bool append = true
+    ){
+
+        ofstream out;
+
+        if(append){
+
+            out.open(
+                filename,
+                ios::app
+            );
+        }
+        else{
+
+            out.open(filename);
+        }
+
+        if(!out.is_open()){
+
+            cerr
+                << "Failed to open file: "
+                << filename
+                << "\n";
+
+            return;
+        }
+
+        out << "\n========================================\n";
+        out << "POPULATION SUMMARY\n";
+        out << "========================================\n";
+
+        out << "Population Size: "
+            << agents.size()
+            << "\n";
+
+        out << "Species Count: "
+            << species.size()
+            << "\n\n";
+
+        // =========================
+        // Global statistics
+        // =========================
+
+        double best_fitness = -1e18;
+        double worst_fitness = 1e18;
+        double total_fitness = 0.0;
+
+        int best_index = 0;
+
+        for(int i = 0; i < agents.size(); ++i){
+
+            best_fitness =
+                max(
+                    best_fitness,
+                    fitnesses[i]
+                );
+
+            worst_fitness =
+                min(
+                    worst_fitness,
+                    fitnesses[i]
+                );
+
+            total_fitness +=
+                fitnesses[i];
+
+            if(
+                fitnesses[i]
+                >
+                fitnesses[best_index]
+            ){
+                best_index = i;
+            }
+        }
+
+        double avg_fitness =
+            total_fitness
+            /
+            max(
+                1,
+                (int)agents.size()
+            );
+
+        out << "Best Fitness : "
+            << best_fitness
+            << "\n";
+
+        out << "Average Fitness : "
+            << avg_fitness
+            << "\n";
+
+        out << "Worst Fitness : "
+            << worst_fitness
+            << "\n\n";
+
+        // =========================
+        // Best genome overview
+        // =========================
+
+        {
+            Graph& g =
+                agents[best_index];
+
+            int enabled_connections = 0;
+
+            for(
+                const auto& c :
+                g.connections
+            ){
+
+                if(c.enabled)
+                    enabled_connections++;
+            }
+
+            out << "BEST GENOME\n";
+            out << "------------\n";
+
+            out << "Index: "
+                << best_index
+                << "\n";
+
+            out << "Nodes: "
+                << g.nodes.size()
+                << "\n";
+
+            out << "Connections: "
+                << g.connections.size()
+                << "\n";
+
+            out << "Enabled Connections: "
+                << enabled_connections
+                << "\n";
+
+            out << "Fitness: "
+                << fitnesses[best_index]
+                << "\n\n";
+        }
+
+        // =========================
+        // Species summary
+        // =========================
+
+        out << "SPECIES\n";
+        out << "========================================\n";
+
+        for(
+            int s_idx = 0;
+            s_idx < species.size();
+            ++s_idx
+        ){
+
+            Species& s =
+                species[s_idx];
+
+            out << "\nSpecies "
+                << s_idx
+                << "\n";
+
+            out << "Members: "
+                << s.members.size()
+                << "\n";
+
+            out << "Representative: "
+                << s.representative
+                << "\n";
+
+            out << "Best Historical Fitness: "
+                << s.best_fitness
+                << "\n";
+
+            out << "Stagnation Age: "
+                << s.stagnation_age
+                << "\n";
+
+            double best_species_fit =
+                -1e18;
+
+            double avg_species_fit =
+                0.0;
+
+            int best_member =
+                s.members[0];
+
+            for(int m : s.members){
+
+                avg_species_fit +=
+                    fitnesses[m];
+
+                if(
+                    fitnesses[m]
+                    >
+                    best_species_fit
+                ){
+
+                    best_species_fit =
+                        fitnesses[m];
+
+                    best_member = m;
+                }
+            }
+
+            avg_species_fit /=
+                max(
+                    1,
+                    (int)s.members.size()
+                );
+
+            out << "Current Best Fitness: "
+                << best_species_fit
+                << "\n";
+
+            out << "Average Fitness: "
+                << avg_species_fit
+                << "\n";
+
+            Graph& g =
+                agents[best_member];
+
+            int enabled_connections = 0;
+
+            for(
+                const auto& c :
+                g.connections
+            ){
+
+                if(c.enabled)
+                    enabled_connections++;
+            }
+
+            out << "Best Member Index: "
+                << best_member
+                << "\n";
+
+            out << "Node Count: "
+                << g.nodes.size()
+                << "\n";
+
+            out << "Connection Count: "
+                << g.connections.size()
+                << "\n";
+
+            out << "Enabled Connections: "
+                << enabled_connections
+                << "\n";
+
+            out << "Topology:\n";
+
+            for(
+                const auto& n :
+                g.nodes
+            ){
+
+                out
+                    << "  Node "
+                    << n.id
+                    << " | type="
+                    << n.type
+                    << " | depth="
+                    << n.depth
+                    << " | bias="
+                    << n.bias
+                    << " | activation="
+                    << n.activation
+                    << "\n";
+            }
+
+            out << "Connections:\n";
+
+            for(
+                const auto& c :
+                g.connections
+            ){
+
+                out
+                    << "  Conn "
+                    << c.id
+                    << " : "
+                    << c.nodein
+                    << " -> "
+                    << c.nodeout
+                    << " | w="
+                    << c.weight
+                    << " | enabled="
+                    << c.enabled
+                    << "\n";
+            }
+        }
+
+        out << "\n========================================\n";
+
+        out.close();
+    }
+
+    void printCompactToFile(
+        const vector<double>& fitnesses,
+        const string& filename,
+        int generation,
+        bool append = true
+    ){
+
+        ofstream out;
+
+        if(append){
+
+            out.open(
+                filename,
+                ios::app
+            );
+        }
+        else{
+
+            out.open(filename);
+        }
+
+        if(!out.is_open()){
+
+            cerr
+                << "Failed to open file: "
+                << filename
+                << "\n";
+
+            return;
+        }
+
+        double best = -1e18;
+        double avg = 0.0;
+
+        int best_index = 0;
+
+        for(int i = 0; i < agents.size(); ++i){
+
+            avg += fitnesses[i];
+
+            if(fitnesses[i] > best){
+
+                best = fitnesses[i];
+
+                best_index = i;
+            }
+        }
+
+        avg /= agents.size();
+
+        out
+            << "Generation: "
+            << generation
+            << " | Best: "
+            << best
+            << " | Avg: "
+            << avg
+            << " | Species: "
+            << species.size()
+            << " | Best Nodes: "
+            << agents[best_index].nodes.size()
+            << " | Best Connections: "
+            << agents[best_index].connections.size()
+            << "\n";
+
+        out.close();
+    }
+
+};
+
+#endif

@@ -1,0 +1,1 @@
+g++ main.cpp naturalprocessor.cpp substitutesolver.cpp newtonsmethod.cpp -o main

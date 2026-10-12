@@ -1,0 +1,412 @@
+#include <bits/stdc++.h>
+#include <boost/multiprecision/cpp_int.hpp>
+
+using namespace std;
+using boost::multiprecision::cpp_int;
+
+
+class Rational{
+
+    public:
+    cpp_int numerator;
+    cpp_int denominator;
+
+    cpp_int gcd(cpp_int a, cpp_int b){
+        if(a < 0) a = -a;
+        if(b < 0) b = -b;
+
+        while(b != 0){
+            cpp_int temp = a % b;
+            a = b;
+            b = temp;
+        }
+
+        return a;
+    }
+
+    cpp_int lcm(cpp_int a, cpp_int b){
+        if(a < 0) a = -a;
+        if(b < 0) b = -b;
+
+        if(a == 0 || b == 0)
+            return 0;
+
+        return (a / gcd(a, b)) * b;
+    }
+
+    Rational simplify(){
+        cpp_int g = gcd(numerator, denominator);
+        return Rational(numerator / g, denominator / g);
+    }
+
+    Rational invert(){
+        return Rational(denominator, numerator);
+    }
+
+    Rational(cpp_int num){
+        this->numerator = num;
+        this->denominator = 1;
+    }
+
+    Rational(cpp_int numerator, cpp_int denominator){
+        if(denominator > 0){
+            this->numerator = numerator;
+            this->denominator = denominator;
+        } else {
+            this->numerator = -numerator;
+            this->denominator = -denominator;
+        }
+
+        cpp_int g = gcd(numerator, denominator);
+
+        this->numerator /= g;
+        this->denominator /= g;
+    }
+
+    Rational operator+(Rational other){
+        cpp_int commondenom = lcm(denominator, other.denominator);
+
+        cpp_int num1 = numerator * (commondenom / denominator);
+        cpp_int num2 = other.numerator * (commondenom / other.denominator);
+
+        return Rational(num1 + num2, commondenom).simplify();
+    }
+
+    Rational operator-(){
+        return Rational(-numerator, denominator);
+    }
+
+    Rational operator-(Rational other){
+        return (*this) + (-other);
+    }
+
+    Rational operator*(Rational other){
+        return Rational(
+            numerator * other.numerator,
+            denominator * other.denominator
+        ).simplify();
+    }
+
+    Rational operator/(Rational other){
+        return (*this) * other.invert();
+    }
+
+    string toString(){
+        return numerator.convert_to<string>() + "/" +
+               denominator.convert_to<string>();
+    }
+
+    bool operator==(Rational other){
+        Rational red1 = this->simplify();
+        Rational red2 = other.simplify();
+
+        return red1.numerator == red2.numerator &&
+               red1.denominator == red2.denominator;
+    }
+
+    bool operator!=(Rational other){
+        Rational red1 = this->simplify();
+        Rational red2 = other.simplify();
+
+        return red1.numerator != red2.numerator ||
+               red1.denominator != red2.denominator;
+    }
+
+    bool operator>(Rational other){
+        cpp_int commondenom = lcm(denominator, other.denominator);
+
+        cpp_int num1 = numerator * (commondenom / denominator);
+        cpp_int num2 = other.numerator *
+                       (commondenom / other.denominator);
+
+        return num1 > num2;
+    }
+
+    bool operator<(Rational other){
+        cpp_int commondenom = lcm(denominator, other.denominator);
+
+        cpp_int num1 = numerator * (commondenom / denominator);
+        cpp_int num2 = other.numerator *
+                       (commondenom / other.denominator);
+
+        return num1 < num2;
+    }
+
+    bool operator>=(Rational other){
+        cpp_int commondenom = lcm(denominator, other.denominator);
+
+        cpp_int num1 = numerator * (commondenom / denominator);
+        cpp_int num2 = other.numerator *
+                       (commondenom / other.denominator);
+
+        return num1 >= num2;
+    }
+
+    bool operator<=(Rational other){
+        cpp_int commondenom = lcm(denominator, other.denominator);
+
+        cpp_int num1 = numerator * (commondenom / denominator);
+        cpp_int num2 = other.numerator *
+                       (commondenom / other.denominator);
+
+        return num1 <= num2;
+    }
+
+};
+
+
+class System{
+
+    public:
+
+    long long N;
+    vector<vector<Rational>> matrix;
+    vector<Rational> equals;
+
+    System(long long N){
+
+        matrix = vector<vector<Rational>>(
+            N,
+            vector<Rational>(N, Rational(0))
+        );
+
+        equals = vector<Rational>(N, Rational(0));
+
+        this->N = N;
+    }
+
+    long long addZero(long long row){
+
+        long long numofzeros = 0;
+
+        for(long long i = 0; i < N; i++){
+
+            if(matrix[row][i] == Rational(0)){
+                numofzeros++;
+            } else {
+                break;
+            }
+        }
+
+        if(numofzeros == N){
+
+            if(equals[row] == Rational(0))
+                return 2;
+            else
+                return 1;
+        }
+
+        if(numofzeros >= row)
+            return 0;
+
+        Rational coef =
+            matrix[numofzeros][numofzeros] /
+            matrix[row][numofzeros];
+
+        for(long long i = numofzeros; i < N; i++){
+
+            matrix[row][i] =
+                matrix[row][i] * coef;
+        }
+
+        equals[row] =
+            equals[row] * coef;
+
+        for(long long i = numofzeros; i < N; i++){
+
+            matrix[row][i] =
+                matrix[row][i] -
+                matrix[numofzeros][i];
+        }
+
+        equals[row] =
+            equals[row] -
+            equals[numofzeros];
+
+        return 0;
+    }
+
+    long long rowEchelon(){
+
+        bool flag = false;
+
+        for(long long i = 1; i < N && !flag; i++){
+
+            for(long long j = i; j < N && !flag; j++){
+
+                long long returncode = addZero(j);
+
+                if(returncode != 0){
+
+                    flag = true;
+
+                    if(returncode == 1)
+                        std::cout << "NO SOLUTION TO SYSTEM\n";
+                    else
+                        std::cout << "INFINITELY MANY SOLUTIONS TO SYSTEM\n";
+                }
+            }
+        }
+
+        if(flag)
+            return -1;
+
+        long long numofzeros = 0;
+
+        for(long long i = 0; i < N; i++){
+
+            if(matrix[N-1][i] == Rational(0)){
+                numofzeros++;
+            } else {
+                break;
+            }
+        }
+
+        if(numofzeros == N){
+
+            if(equals[N-1] == Rational(0))
+                std::cout << "INFINITELY MANY SOLUTIONS TO SYSTEM\n";
+            else
+                std::cout << "NO SOLUTION TO SYSTEM\n";
+
+            return -1;
+        }
+
+        return 0;
+    }
+
+    void divBothSides(long long row){
+
+        equals[row] =
+            equals[row] / matrix[row][row];
+
+        matrix[row][row] = Rational(1);
+    }
+
+    void substitute(long long row){
+
+        for(long long i = row + 1; i < N; i++){
+
+            equals[row] =
+                equals[row] -
+                (matrix[row][i] * equals[i]);
+
+            matrix[row][i] = Rational(0);
+        }
+    }
+
+    void solveRow(long long row){
+
+        substitute(row);
+        divBothSides(row);
+    }
+
+    void solve(){
+
+        long long returncode = rowEchelon();
+
+        if(returncode == -1)
+            return;
+
+        for(long long i = N-1; i >= 0; i--){
+            solveRow(i);
+        }
+    }
+
+    void print(){
+
+        for(long long i = 0; i < N; i++){
+
+            for(long long j = 0; j < N; j++){
+
+                std::cout
+                    << matrix[i][j].toString()
+                    << "  ";
+            }
+
+            std::cout
+                << ":  "
+                << equals[i].toString()
+                << "\n";
+        }
+    }
+};
+
+
+int main(){
+
+    const int runs = 1;
+
+    for(long long N = 1; N <= 50; N++){
+
+        auto createSystem = [N](){
+
+            System system(N);
+
+            for(long long i = 0; i < N; i++){
+
+                for(long long j = 0; j < N; j++){
+
+                    if(i == j){
+
+                        system.matrix[i][j] =
+                            Rational(25);
+
+                    } else {
+
+                        system.matrix[i][j] =
+                            Rational(
+                                (i + 2*j + 1) % 7 - 3
+                            );
+                    }
+                }
+            }
+
+            // Known solution:
+            // x1 = 1, x2 = 2, ..., xN = N
+            //
+            // Calculate b = A*x
+
+            for(long long i = 0; i < N; i++){
+
+                Rational sum(0);
+
+                for(long long j = 0; j < N; j++){
+
+                    sum = sum +
+                        system.matrix[i][j] *
+                        Rational(j + 1);
+                }
+
+                system.equals[i] = sum;
+            }
+
+            return system;
+        };
+
+
+        auto start = chrono::steady_clock::now();
+
+        for(int i = 0; i < runs; i++){
+
+            System system = createSystem();
+
+            system.solve();
+        }
+
+        auto end = chrono::steady_clock::now();
+
+        chrono::duration<double, milli> elapsed =
+            end - start;
+
+
+        std::cout
+            << "N = " << N
+            << " | Runs = " << runs
+            << " | Total = " << elapsed.count()
+            << " ms"
+            << " | Average = "
+            << elapsed.count() / runs
+            << " ms\n";
+    }
+}

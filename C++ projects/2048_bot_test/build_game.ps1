@@ -1,0 +1,1 @@
+g++ emulator.cpp evaluation.cpp play2048.cpp minimax.cpp -o game

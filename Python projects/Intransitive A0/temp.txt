@@ -1,0 +1,69 @@
+torch.set_grad_enabled(False)
+
+    game = Intransitive()
+
+    validate_initial_position(game)
+
+    state = game.initial_state()
+
+    game.render(state)
+
+    print(
+        "\nLegal actions:",
+        len(game.legal_actions(state))
+    )
+
+    print(
+        "Observation shape:",
+        game.observation(state).shape
+    )
+
+    print(
+        "Number of actions:",
+        N_ACTIONS
+    )
+
+    # Small network for testing.
+    network = PolicyValueNet(
+        channels=64,
+        num_blocks=5,
+    )
+
+    network.eval()
+
+    mcts = MCTS(
+        game=game,
+        network=network,
+        simulations=100,
+        c_puct=1.5,
+        device="cpu",
+    )
+
+    action, policy = mcts.select_action(
+        state,
+        temperature=1.0,
+    )
+
+    print(
+        "\nSelected action:",
+        action
+    )
+
+    print(
+        "Move:",
+        decode_action(action),
+        "->",
+        action_destination(action),
+    )
+
+    print(
+        "Policy sum:",
+        policy.sum()
+    )
+
+    next_state = game.apply(
+        state,
+        action,
+    )
+
+    game.render(next_state)

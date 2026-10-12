@@ -1,0 +1,1 @@
+g++ solver.h bestopener.cpp -o bestopener

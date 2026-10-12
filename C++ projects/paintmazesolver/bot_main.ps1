@@ -1,0 +1,1 @@
+g++ bot_main.cpp bot.cpp gridmanager.cpp -o bot_main

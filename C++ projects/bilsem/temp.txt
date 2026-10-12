@@ -1,0 +1,1719 @@
+//TODO: Run compile() at the population level once all mutations are done (randMutate()); don't compile after each individual mutation
+
+//MAJOR TODO: Test XOR
+
+#include <bits/stdc++.h>
+
+#ifndef AGENT_H
+#define AGENT_H
+
+using namespace std;
+
+struct node_value_pair{
+    int id;
+    double value;
+
+    node_value_pair(){}
+
+    node_value_pair(int _id, double _value){
+        id = _id;
+        value = _value;
+    }
+};
+
+struct ConnectionInnovation{
+
+    int in;
+    int out;
+    int innovation_id;
+
+    ConnectionInnovation(
+        int _in,
+        int _out,
+        int _innovation_id
+    ){
+        in = _in;
+        out = _out;
+        innovation_id = _innovation_id;
+    }
+};
+
+struct NodeSplitInnovation{
+
+    int split_cnctn_id;
+
+    int innovation_id;
+
+    int new_cnctn_1;
+    int new_cnctn_2;
+
+    NodeSplitInnovation(
+        int _split_cnctn_id,
+        int _innovation_id,
+        int _new_cnctn_1,
+        int _new_cnctn_2
+    ){
+        split_cnctn_id = _split_cnctn_id;
+
+        innovation_id = _innovation_id;
+
+        new_cnctn_1 = _new_cnctn_1;
+        new_cnctn_2 = _new_cnctn_2;
+    }
+};
+
+class Graph{
+
+public:
+
+    class Node{
+
+    public:
+
+        int id = 0;
+
+        char type = 'h';
+
+        int depth = 0;
+
+        double bias = 0;
+
+        char activation = 'l';
+
+        Node(){}
+
+        Node(
+            int _id,
+            char _type,
+            int _depth,
+            double _bias,
+            char _activation
+        ){
+            id = _id;
+            type = _type;
+            depth = _depth;
+            bias = _bias;
+            activation = _activation;
+        }
+    };
+
+    class Connection{
+
+    public:
+
+        int id = 0;
+
+        int nodein = 0;
+        int nodeout = 0;
+
+        double weight = 0;
+
+        bool enabled = true;
+
+        Connection(){}
+
+        Connection(
+            int _id,
+            int _nodein,
+            int _nodeout,
+            double _weight,
+            bool _enabled
+        ){
+            id = _id;
+
+            nodein = _nodein;
+            nodeout = _nodeout;
+
+            weight = _weight;
+
+            enabled = _enabled;
+        }
+    };
+
+    struct RuntimeConnection{
+
+        int in_index;
+        int out_index;
+
+        double weight;
+    };
+
+public:
+
+    vector<Node> nodes = {};
+
+    vector<Connection> connections = {};
+
+    unordered_map<int,int> node_id_to_index = {};
+
+    unordered_map<int,int> connection_id_to_index = {};
+
+    unordered_map<int, vector<int>> incoming_connections = {};
+
+    unordered_map<int, vector<int>> outgoing_connections = {};
+
+    unordered_set<long long> edge_lookup = {};
+
+    vector<int> topo_order = {};
+
+    vector<RuntimeConnection> runtime_connections = {};
+
+    mt19937 rng;
+
+public:
+
+    Graph(){
+        updateRng();
+    }
+
+    Graph(
+        vector<Node> _nodes,
+        vector<Connection> _connections
+    ){
+
+        nodes = _nodes;
+
+        connections = _connections;
+
+        updateRng();
+
+        initializeStructures();
+
+        updateDepths();
+
+        compile();
+    }
+
+public:
+
+    void updateRng(){
+
+        random_device rd;
+
+        rng.seed(rd());
+    }
+
+private:
+
+    long long edgeKey(int in, int out) const{
+
+        return (
+            (static_cast<long long>(in) << 32)
+            |
+            static_cast<unsigned int>(out)
+        );
+    }
+
+    void registerNode(int index){
+
+        node_id_to_index[
+            nodes[index].id
+        ] = index;
+    }
+
+    void registerConnection(int index){
+
+        connection_id_to_index[
+            connections[index].id
+        ] = index;
+
+        incoming_connections[
+            connections[index].nodeout
+        ].push_back(index);
+
+        outgoing_connections[
+            connections[index].nodein
+        ].push_back(index);
+
+        edge_lookup.insert(
+            edgeKey(
+                connections[index].nodein,
+                connections[index].nodeout
+            )
+        );
+    }
+
+    void initializeStructures(){
+
+        node_id_to_index.clear();
+
+        connection_id_to_index.clear();
+
+        incoming_connections.clear();
+
+        outgoing_connections.clear();
+
+        edge_lookup.clear();
+
+        for(int i = 0; i < nodes.size(); ++i){
+            registerNode(i);
+        }
+
+        for(int i = 0; i < connections.size(); ++i){
+            registerConnection(i);
+        }
+    }
+
+private:
+
+    bool cyclicDFS(
+        int id,
+        unordered_map<int,int>& state
+    ){
+
+        state[id] = 1;
+
+        for(int conn_index : outgoing_connections[id]){
+
+            if(!connections[conn_index].enabled)
+                continue;
+
+            int next =
+                connections[conn_index].nodeout;
+
+            if(state[next] == 1)
+                return true;
+
+            if(state[next] == 0){
+
+                if(cyclicDFS(next, state))
+                    return true;
+            }
+        }
+
+        state[id] = 2;
+
+        return false;
+    }
+
+public:
+
+    bool cyclicTest(){
+
+        unordered_map<int,int> state;
+
+        for(const Node& n : nodes){
+            state[n.id] = 0;
+        }
+
+        for(const Node& n : nodes){
+
+            if(state[n.id] == 0){
+
+                if(cyclicDFS(n.id, state))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+private:
+
+    int depthrecurse(
+        int id,
+        unordered_map<int,int>& memo
+    ){
+
+        if(memo.count(id))
+            return memo[id];
+
+        int index = node_id_to_index[id];
+
+        if(nodes[index].type == 'i'){
+
+            nodes[index].depth = 0;
+
+            memo[id] = 1;
+
+            return 1;
+        }
+
+        int best = 0;
+
+        for(int conn_index : incoming_connections[id]){
+
+            if(!connections[conn_index].enabled)
+                continue;
+
+            best = max(
+                best,
+                depthrecurse(
+                    connections[conn_index].nodein,
+                    memo
+                )
+            );
+        }
+
+        nodes[index].depth = best;
+
+        memo[id] = best + 1;
+
+        return best + 1;
+    }
+
+public:
+
+    void updateDepths(){
+
+        if(cyclicTest())
+            throw runtime_error("Cyclic graph");
+
+        unordered_map<int,int> memo;
+
+        for(Node& n : nodes){
+
+            if(n.type == 'o'){
+                depthrecurse(n.id, memo);
+            }
+        }
+    }
+
+private:
+
+    static double activate(
+        double x,
+        char activation
+    ){
+
+        switch(activation){
+
+            case 's':
+                return 1.0 / (1.0 + exp(-x));
+
+            case 't':
+                return tanh(x);
+
+            case 'r':
+                return max(0.0, x);
+
+            case 'l':
+                return (x > 0.0)
+                    ? x
+                    : 0.01 * x;
+
+            case 'x':
+            default:
+                return x;
+        }
+    }
+
+public:
+
+    void compile(){ //Establish topological order and set up runtime connections
+
+        topo_order.clear();
+
+        runtime_connections.clear();
+
+        vector<pair<int,int>> sorter;
+
+        for(int i = 0; i < nodes.size(); ++i){
+
+            sorter.push_back({
+                nodes[i].depth,
+                i
+            });
+        }
+
+        sort(
+            sorter.begin(),
+            sorter.end()
+        );
+
+        for(auto& p : sorter){
+            topo_order.push_back(p.second);
+        }
+
+        for(const Connection& c : connections){
+
+            if(!c.enabled)
+                continue;
+
+            runtime_connections.push_back({
+                node_id_to_index[c.nodein],
+                node_id_to_index[c.nodeout],
+                c.weight
+            });
+        }
+    }
+
+public:
+
+    vector<node_value_pair> compute(
+        const vector<node_value_pair>& inputs
+    ){
+
+        vector<double> values(
+            nodes.size(),
+            0.0
+        );
+
+        for(const auto& in : inputs){
+
+            values[
+                node_id_to_index[in.id]
+            ] = in.value;
+        }
+
+        for(int node_index : topo_order){
+
+            Node& n = nodes[node_index];
+
+            if(n.type == 'i')
+                continue;
+
+            double sum = n.bias;
+
+            for(int conn_index :
+                incoming_connections[n.id]
+            ){
+
+                Connection& c =
+                    connections[conn_index];
+
+                if(!c.enabled)
+                    continue;
+
+                int in_idx =
+                    node_id_to_index[c.nodein];
+
+                sum +=
+                    values[in_idx]
+                    *
+                    c.weight;
+            }
+
+            values[node_index] =
+                activate(
+                    sum,
+                    n.activation
+                );
+        }
+
+        vector<node_value_pair> outputs;
+
+        for(int i = 0; i < nodes.size(); ++i){
+
+            if(nodes[i].type == 'o'){
+
+                outputs.push_back({
+                    nodes[i].id,
+                    values[i]
+                });
+            }
+        }
+
+        return outputs;
+    }
+
+public:
+
+    void perturbWeights(
+        double mutation_chance,
+        double reset_probability,
+        double mutation_std_dev,
+        double reset_lower,
+        double reset_upper
+    ){
+
+        uniform_real_distribution<double> prob(0,1);
+
+        normal_distribution<double> perturb(
+            0,
+            mutation_std_dev
+        );
+
+        uniform_real_distribution<double> reset(
+            reset_lower,
+            reset_upper
+        );
+
+        for(Connection& c : connections){
+
+            if(prob(rng) > mutation_chance)
+                continue;
+
+            if(prob(rng) < reset_probability){
+
+                c.weight = reset(rng);
+            }
+            else{
+
+                c.weight += perturb(rng);
+            }
+        }
+
+        compile();
+    }
+
+    void perturbBiases(
+        double mutation_chance,
+        double reset_probability,
+        double mutation_std_dev,
+        double reset_lower,
+        double reset_upper
+    ){
+
+        uniform_real_distribution<double> prob(0,1);
+
+        normal_distribution<double> perturb(
+            0,
+            mutation_std_dev
+        );
+
+        uniform_real_distribution<double> reset(
+            reset_lower,
+            reset_upper
+        );
+
+        for(Node& n : nodes){
+
+            if(n.type == 'i')
+                continue;
+
+            if(prob(rng) > mutation_chance)
+                continue;
+
+            if(prob(rng) < reset_probability){
+
+                n.bias = reset(rng);
+            }
+            else{
+
+                n.bias += perturb(rng);
+            }
+        }
+    }
+
+    void mutateEnableDisable(
+        double disable_prob,
+        double enable_prob
+    ){
+
+        uniform_real_distribution<double> prob(0,1);
+
+        for(Connection& c : connections){
+
+            if(c.enabled){
+
+                if(prob(rng) < disable_prob)
+                    c.enabled = false;
+            }
+            else{
+
+                if(prob(rng) < enable_prob)
+                    c.enabled = true;
+            }
+        }
+
+        compile();
+    }
+
+public:
+
+    void randConnection(
+        int& connection_inno_number,
+        vector<ConnectionInnovation>* lookup
+    ){
+
+        vector<pair<int,int>> candidates;
+
+        for(const Node& n1 : nodes){
+
+            for(const Node& n2 : nodes){
+
+                if(n1.id == n2.id)
+                    continue;
+
+                if(n1.type == 'o')
+                    continue;
+
+                if(n2.type == 'i')
+                    continue;
+
+                if(n1.depth >= n2.depth)
+                    continue;
+
+                if(
+                    edge_lookup.count(
+                        edgeKey(n1.id, n2.id)
+                    )
+                ){
+                    continue;
+                }
+
+                candidates.push_back({
+                    n1.id,
+                    n2.id
+                });
+            }
+        }
+
+        if(candidates.empty())
+            return;
+
+        uniform_int_distribution<int> dist(
+            0,
+            candidates.size() - 1
+        );
+
+        pair<int,int> selected =
+            candidates[dist(rng)];
+
+        int found = -1;
+
+        for(
+            const ConnectionInnovation& i :
+            *lookup
+        ){
+
+            if(
+                i.in == selected.first
+                &&
+                i.out == selected.second
+            ){
+                found = i.innovation_id;
+                break;
+            }
+        }
+
+        normal_distribution<double> init(0,1);
+
+        double w = init(rng);
+
+        if(found == -1){
+
+            connection_inno_number++;
+
+            connections.push_back(
+                Connection(
+                    connection_inno_number,
+                    selected.first,
+                    selected.second,
+                    w,
+                    true
+                )
+            );
+
+            registerConnection(
+                connections.size() - 1
+            );
+
+            lookup->push_back(
+                ConnectionInnovation(
+                    selected.first,
+                    selected.second,
+                    connection_inno_number
+                )
+            );
+        }
+        else{
+
+            connections.push_back(
+                Connection(
+                    found,
+                    selected.first,
+                    selected.second,
+                    w,
+                    true
+                )
+            );
+
+            registerConnection(
+                connections.size() - 1
+            );
+        }
+
+        updateDepths();
+
+        compile();
+    }
+
+public:
+
+    void insertNode(
+        int& node_inno_number,
+        int& connection_inno_number,
+        vector<NodeSplitInnovation>* lookup
+    ){
+
+        vector<int> enabled;
+
+        for(int i = 0; i < connections.size(); ++i){
+
+            if(connections[i].enabled)
+                enabled.push_back(i);
+        }
+
+        if(enabled.empty())
+            return;
+
+        uniform_int_distribution<int> dist(
+            0,
+            enabled.size() - 1
+        );
+
+        int conn_index =
+            enabled[dist(rng)];
+
+        Connection& old =
+            connections[conn_index];
+
+        old.enabled = false;
+
+        int found_node = -1;
+        int found_c1 = -1;
+        int found_c2 = -1;
+
+        for(
+            const NodeSplitInnovation& n :
+            *lookup
+        ){
+
+            if(n.split_cnctn_id == old.id){
+
+                found_node = n.innovation_id;
+
+                found_c1 = n.new_cnctn_1;
+
+                found_c2 = n.new_cnctn_2;
+
+                break;
+            }
+        }
+
+        int new_node_id;
+
+        int c1;
+        int c2;
+
+        if(found_node == -1){
+
+            node_inno_number++;
+            connection_inno_number++;
+            c1 = connection_inno_number;
+
+            connection_inno_number++;
+            c2 = connection_inno_number;
+
+            new_node_id = node_inno_number;
+
+            lookup->push_back(
+                NodeSplitInnovation(
+                    old.id,
+                    new_node_id,
+                    c1,
+                    c2
+                )
+            );
+        }
+        else{
+
+            new_node_id = found_node;
+
+            c1 = found_c1;
+            c2 = found_c2;
+        }
+
+        nodes.push_back(
+            Node(
+                new_node_id,
+                'h',
+                0,
+                0,
+                'l'  //IMPORTANT: This determines the activation function of the new nodes that arise due to mutation
+            )
+        );
+
+        registerNode(
+            nodes.size() - 1
+        );
+
+        connections.push_back(
+            Connection(
+                c1,
+                old.nodein,
+                new_node_id,
+                1.0,
+                true
+            )
+        );
+
+        registerConnection(
+            connections.size() - 1
+        );
+
+        connections.push_back(
+            Connection(
+                c2,
+                new_node_id,
+                old.nodeout,
+                old.weight,
+                true
+            )
+        );
+
+        registerConnection(
+            connections.size() - 1
+        );
+
+        updateDepths();
+
+        compile();
+    }
+
+public:
+
+    void initialize_he(){
+
+        int fan_in = 0;
+
+        for(Node& n : nodes){
+
+            if(n.type == 'i')
+                fan_in++;
+        }
+
+        normal_distribution<double> dist(
+            0,
+            sqrt(2.0 / fan_in)
+        );
+
+        for(Connection& c : connections){
+            c.weight = dist(rng);
+        }
+
+        for(Node& n : nodes){
+
+            if(n.type != 'i')
+                n.bias = 0;
+        }
+
+        compile();
+    }
+};
+
+
+
+struct Species{
+
+    int representative = -1; //Representative genome index
+
+    vector<int> members = {}; //Members of this species with their indices in a population
+
+    double adjusted_fitness = 0; //Average adjusted fitness
+
+    double best_fitness = -1e18;
+
+    int stagnation_age = 0;
+
+};
+
+
+class Population{
+
+public:
+
+    vector<Graph> agents = {};
+
+    mt19937 rng;
+
+    int node_inno_number = 0;
+
+    int connection_inno_number = 0;
+
+    vector<ConnectionInnovation>
+    connection_inno_lookup = {};
+
+    vector<NodeSplitInnovation>
+    node_inno_lookup = {};
+
+    vector<Species> species = {};
+
+public:
+
+    Population(){}
+
+    Population(
+        vector<Graph> _agents,
+        int node_inno,
+        int connection_inno
+    ){
+
+        agents = _agents;
+
+        node_inno_number = node_inno;
+
+        connection_inno_number =
+            connection_inno;
+
+        updateRng();
+    }
+
+public:
+
+    void updateRng(){
+
+        random_device rd;
+
+        rng.seed(rd());
+    }
+
+private:
+
+    double weight_mutation_chance = 0.8;
+
+    double bias_mutation_chance = 0.3;
+
+    double reset_probability = 0.1;
+
+    double mutation_std_dev = 0.1;
+
+    double reset_lower = -1;
+
+    double reset_upper = 1;
+
+    double add_connection_prob = 0.05;
+
+    double add_node_prob = 0.03;
+
+    double disable_prob = 0.01;
+
+    double enable_prob = 0.002;
+
+public:
+
+    void randMutate(int index){ //Do all mutations
+
+        uniform_real_distribution<double> prob(0,1);
+
+        agents[index].perturbWeights(
+            weight_mutation_chance,
+            reset_probability,
+            mutation_std_dev,
+            reset_lower,
+            reset_upper
+        );
+
+        agents[index].perturbBiases(
+            bias_mutation_chance,
+            reset_probability,
+            mutation_std_dev,
+            reset_lower,
+            reset_upper
+        );
+
+        if(prob(rng) < add_connection_prob){
+
+            agents[index].randConnection(
+                connection_inno_number,
+                &connection_inno_lookup
+            );
+        }
+
+        if(prob(rng) < add_node_prob){
+
+            agents[index].insertNode(
+                node_inno_number,
+                connection_inno_number,
+                &node_inno_lookup
+            );
+        }
+
+        agents[index].mutateEnableDisable(
+            disable_prob,
+            enable_prob
+        );
+    }
+
+public:
+
+    void initialize_he(){
+
+        for(Graph& g : agents){
+            g.initialize_he();
+        }
+    }
+
+public:
+
+    Graph crossover(
+        int index1,
+        double fitness1,
+        int index2,
+        double fitness2
+    ){
+
+        int fitindex;
+        int unfitindex;
+
+        if(fitness1 >= fitness2){
+
+            fitindex = index1;
+            unfitindex = index2;
+        }
+        else{
+
+            fitindex = index2;
+            unfitindex = index1;
+        }
+
+        Graph& fit_parent = agents[fitindex];
+        Graph& unfit_parent = agents[unfitindex];
+
+        /*
+            Key   = innovation ID
+            Value = actual gene (Node/Connection object itself)
+        */
+
+        unordered_map<int, Graph::Node> fit_nodes;
+        unordered_map<int, Graph::Node> unfit_nodes;
+
+        unordered_map<int, Graph::Connection> fit_connections;
+        unordered_map<int, Graph::Connection> unfit_connections;
+
+        for(const Graph::Node& n : fit_parent.nodes){
+
+            fit_nodes[n.id] = n;
+        }
+
+        for(const Graph::Node& n : unfit_parent.nodes){
+
+            unfit_nodes[n.id] = n;
+        }
+
+        for(const Graph::Connection& c : fit_parent.connections){
+
+            fit_connections[c.id] = c;
+        }
+
+        for(const Graph::Connection& c : unfit_parent.connections){
+
+            unfit_connections[c.id] = c;
+        }
+
+        vector<Graph::Connection> child_connections;
+
+        uniform_real_distribution<double> prob(0.0, 1.0);
+
+        vector<int> innovations;
+
+        for(const auto& pair : fit_connections){
+            innovations.push_back(pair.first);
+        }
+
+        sort(
+            innovations.begin(),
+            innovations.end()
+        );
+
+        for(int innovation : innovations){ //Each individual mapping is treated as a pair in the for-each loop, so the variable pair is of type pair.
+
+            //Check whether this innovation exists in each parent.
+
+            bool in_fit =
+                fit_connections.count(innovation); //1 if exists, 0 if not
+                //Since we loop over the fit connections, this will always exist, but here it is for readability purposes
+
+            bool in_unfit =
+                unfit_connections.count(innovation); //1 if exists, 0 if not
+
+            Graph::Connection chosen;
+
+            if(in_fit && in_unfit){ //Matching gene
+
+                //Randomly inherit from either parent
+
+                if(prob(rng) < 0.5){
+
+                    chosen = fit_connections[innovation];
+                }
+                else{
+
+                    chosen = unfit_connections[innovation];
+                }
+
+                bool enabled_fit =
+                    fit_connections[innovation].enabled;
+
+                bool enabled_unfit =
+                    unfit_connections[innovation].enabled;
+
+                
+                //If either parent disabled the gene, 75% chance child keeps it disabled.
+
+                if(!enabled_fit || !enabled_unfit){
+
+                    if(prob(rng) < 0.75){
+
+                        chosen.enabled = false;
+                    }
+                    else{
+
+                        chosen.enabled = true;
+                    }
+                }
+            }
+
+
+
+            /*
+                CASE 2:
+                Disjoint or excess gene
+
+                Since we iterate over fitter parent only,
+                this automatically means:
+                - keep fitter parent's unique genes
+            */
+
+            else{ //Excess/Disjoint gene
+
+                chosen = fit_connections[innovation];
+            }
+
+            child_connections.push_back(chosen);
+        }
+
+        //Determine which nodes are needed, only add those nodes to child (don't add garbage nodes)
+
+        unordered_set<int> required_nodes; //Set used to avoid duplicates
+
+        
+        //Every connection references and input node and an output node. Those nodes must exist in the child.
+
+        for(const auto& c : child_connections){
+
+            required_nodes.insert(c.nodein);
+            required_nodes.insert(c.nodeout);
+        }
+
+        vector<Graph::Node> child_nodes;
+
+        for(int node_id : required_nodes){
+
+            bool in_fit =
+                fit_nodes.count(node_id);
+
+            bool in_unfit =
+                unfit_nodes.count(node_id);
+
+            Graph::Node chosen;
+
+            if(in_fit && in_unfit){ //Node exists in both parents
+
+                if(prob(rng) < 0.5){
+
+                    chosen = fit_nodes[node_id];
+                }
+                else{
+
+                    chosen = unfit_nodes[node_id];
+                }
+            } 
+            
+            else if(in_fit){ //Node exists in fit parent
+
+                chosen = fit_nodes[node_id];
+
+            }
+
+            else{ //It shouldn't come to this since child is structurally identical to fit parent (before mutation) since excess/disjoint genes are inherited from fit parent but it should be handled safely if it does due to some issue
+                
+                chosen = unfit_nodes[node_id];
+            
+            }
+
+            child_nodes.push_back(chosen);
+
+        }
+
+
+
+        /*
+            Construct final child graph.
+
+            Constructor automatically:
+            - builds lookup tables
+            - updates depths
+            - compiles runtime structure
+        */
+
+        Graph child = Graph( //Constructor automatically builds lookup tables, updates depths and compiles structure
+            child_nodes,
+            child_connections
+        );
+
+        return child;
+    }
+
+
+    double compatibilityDistance(
+        const Graph& g1,
+        const Graph& g2
+    ){
+
+        unordered_map<int,double> g1_weights;
+        unordered_map<int,double> g2_weights;
+
+        unordered_set<int> all_innovations;
+
+        int max1 = 0;
+        int max2 = 0;
+
+        for(const auto& c : g1.connections){
+
+            g1_weights[c.id] = c.weight;
+
+            all_innovations.insert(c.id);
+
+            max1 = max(max1, c.id);
+        }
+
+        for(const auto& c : g2.connections){
+
+            g2_weights[c.id] = c.weight;
+
+            all_innovations.insert(c.id);
+
+            max2 = max(max2, c.id);
+        }
+
+        int matching = 0;
+        int disjoint = 0;
+        int excess = 0;
+
+        double weight_diff = 0;
+
+        for(int innovation : all_innovations){
+
+            bool in1 = g1_weights.count(innovation);
+            bool in2 = g2_weights.count(innovation);
+
+            if(in1 && in2){
+
+                matching++;
+
+                weight_diff += abs(
+                    g1_weights[innovation]
+                    -
+                    g2_weights[innovation]
+                );
+            }
+            else{
+
+                if(
+                    (in1 && innovation > max2)
+                    ||
+                    (in2 && innovation > max1)
+                ){
+                    excess++;
+                }
+                else{
+                    disjoint++;
+                }
+            }
+        }
+
+        double avg_weight_diff = 0;
+
+        if(matching > 0){
+
+            avg_weight_diff =
+                weight_diff / matching;
+        }
+
+        int N = max(
+            g1.connections.size(),
+            g2.connections.size()
+        );
+
+        if(N < 20)
+            N = 1;
+
+        double c1 = 1.0;
+        double c2 = 1.0;
+        double c3 = 0.4;
+
+        return
+            (c1 * excess / N)
+            +
+            (c2 * disjoint / N)
+            +
+            (c3 * avg_weight_diff);
+    }
+
+    void speciate(double threshold){
+
+        // Refresh representatives from previous species
+        for(auto& s : species){
+
+            if(s.members.empty())
+                continue;
+
+            uniform_int_distribution<int> dist(
+                0,
+                s.members.size() - 1
+            );
+
+            s.representative =
+                s.members[dist(rng)];
+
+            s.members.clear();
+        }
+
+        vector<Species> new_species;
+
+        for(int i = 0; i < agents.size(); ++i){
+
+            bool assigned = false;
+
+            // Compare against refreshed representatives
+            for(auto& s : species){
+
+                double distance =
+                    compatibilityDistance(
+                        agents[i],
+                        agents[s.representative]
+                    );
+
+                if(distance < threshold){
+
+                    s.members.push_back(i);
+
+                    assigned = true;
+
+                    break;
+                }
+            }
+
+            // Create new species
+            if(!assigned){
+
+                Species s;
+
+                s.representative = i;
+
+                s.members.push_back(i);
+
+                species.push_back(s);
+            }
+        }
+
+        // Remove empty species
+        vector<Species> filtered;
+
+        for(auto& s : species){
+
+            if(!s.members.empty()){
+                filtered.push_back(s);
+            }
+        }
+
+        species = filtered;
+    }
+
+    vector<double> adjustedFitnesses(
+        const vector<double>& raw_fitnesses
+    ){
+
+        vector<double> adjusted(
+            agents.size(),
+            0
+        );
+
+        // Fitness sharing
+        for(const auto& s : species){
+
+            for(int member : s.members){
+
+                adjusted[member] =
+                    raw_fitnesses[member]
+                    /
+                    s.members.size();
+            }
+        }
+
+        return adjusted;
+    }
+
+    int rouletteSelect( //Select weighted by fitness
+        const vector<int>& candidates,
+        const vector<double>& fitnesses
+    ){
+
+        double total = 0.0;
+
+        for(int i : candidates){
+
+            total += max(0.0, fitnesses[i]);
+        }
+
+        // All zero fitness:
+        // choose uniformly random
+        if(total <= 0.0){
+
+            uniform_int_distribution<int> dist(
+                0,
+                candidates.size() - 1
+            );
+
+            return candidates[dist(rng)];
+        }
+
+        uniform_real_distribution<double> dist(
+            0,
+            total
+        );
+
+        double r = dist(rng);
+
+        double accum = 0.0;
+
+        for(int i : candidates){
+
+            accum += max(0.0, fitnesses[i]);
+
+            if(accum >= r)
+                return i;
+        }
+
+        return candidates.back();
+    }
+
+
+    void evolve(
+        const vector<double>& raw_fitnesses,
+        int elite_count = 1
+    ){
+
+        // Build species
+
+        speciate(1.5); //IMPORTANT: Speciation threshold
+
+        // Find global best genome
+        int global_best = 0;
+
+        for(int i = 1; i < agents.size(); ++i){
+
+            if(raw_fitnesses[i] > raw_fitnesses[global_best]){
+                global_best = i;
+            }
+        }
+
+        // Update species stagnation
+        vector<Species> surviving_species;
+
+        for(auto& s : species){
+
+            double species_best = -1e18;
+
+            if(s.members.empty())
+                continue;
+
+            int best_member = s.members[0];
+
+            for(int m : s.members){
+
+                if(raw_fitnesses[m] > species_best){
+
+                    species_best = raw_fitnesses[m];
+
+                    best_member = m;
+                }
+            }
+
+            // Improvement detected
+            if(species_best > s.best_fitness){
+
+                s.best_fitness = species_best;
+
+                s.stagnation_age = 0;
+            }
+            else{
+
+                s.stagnation_age++;
+            }
+
+            // Keep species if:
+            // - not stagnant
+            // - OR contains global best genome
+            bool contains_global_best = false;
+
+            for(int m : s.members){
+
+                if(m == global_best){
+
+                    contains_global_best = true;
+
+                    break;
+                }
+            }
+
+            if(
+                s.stagnation_age <= 15 //IMPORTANT: Stagnaton eradication threshold
+                ||
+                contains_global_best
+            ){
+                surviving_species.push_back(s);
+            }
+        }
+
+        // Prevent total extinction
+        if(surviving_species.empty()){
+
+            Species fallback;
+
+            fallback.representative = global_best;
+
+            fallback.members.push_back(global_best);
+
+            fallback.best_fitness =
+                raw_fitnesses[global_best];
+
+            fallback.stagnation_age = 0;
+
+            surviving_species.push_back(fallback);
+        }
+
+        species = surviving_species;
+
+        // Shared fitness
+        vector<double> adjusted =
+            adjustedFitnesses(raw_fitnesses);
+
+        vector<Graph> next_generation;
+
+        // Keep elites from each species
+        for(auto& s : species){
+
+            int best = s.members[0];
+
+            for(int m : s.members){
+
+                if(raw_fitnesses[m]
+                    >
+                raw_fitnesses[best])
+                {
+                    best = m;
+                }
+            }
+
+            next_generation.push_back(
+                agents[best]
+            );
+
+            if(next_generation.size() >= agents.size())
+                break;
+        }
+
+        // Fill remaining population
+        while(
+            next_generation.size()
+            <
+            agents.size()
+        ){
+
+            /*
+            // Pick random species
+            uniform_int_distribution<int> species_dist(
+                0,
+                species.size() - 1
+            );
+
+            Species& s =
+                species[
+                    species_dist(rng)
+                ];
+            
+            */
+
+            vector<double> species_fitness(
+                species.size(),
+                0.0
+            );
+
+            vector<int> species_ids(species.size(), 0);
+            
+
+            for(int i = 0; i < species.size(); ++i){
+
+                for(int member : species[i].members){
+
+                    species_fitness[i] += adjusted[member];
+                    species_ids[i] = i;
+                }
+            }
+
+            Species& s =
+                species[
+                    rouletteSelect(species_ids, species_fitness)
+                ];
+
+            // Pick parents
+            int p1 =
+                rouletteSelect(
+                    s.members,
+                    adjusted
+                );
+
+            int p2 =
+                rouletteSelect(
+                    s.members,
+                    adjusted
+                );
+
+            // Create child
+            Graph child =
+                crossover(
+                    p1,
+                    raw_fitnesses[p1],
+                    p2,
+                    raw_fitnesses[p2]
+                );
+
+            // Mutate child
+            child.perturbWeights(
+                weight_mutation_chance,
+                reset_probability,
+                mutation_std_dev,
+                reset_lower,
+                reset_upper
+            );
+
+            child.perturbBiases(
+                bias_mutation_chance,
+                reset_probability,
+                mutation_std_dev,
+                reset_lower,
+                reset_upper
+            );
+
+            uniform_real_distribution<double> prob(0,1);
+
+            if(prob(rng) < add_connection_prob){
+
+                child.randConnection(
+                    connection_inno_number,
+                    &connection_inno_lookup
+                );
+            }
+
+            if(prob(rng) < add_node_prob){
+
+                child.insertNode(
+                    node_inno_number,
+                    connection_inno_number,
+                    &node_inno_lookup
+                );
+            }
+
+            next_generation.push_back(child);
+        }
+
+        agents = next_generation;
+    }
+
+};
+
+#endif

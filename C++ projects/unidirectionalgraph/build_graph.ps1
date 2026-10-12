@@ -1,0 +1,1 @@
+g++ graph.cpp inputcompute.cpp fitness.cpp -o graph

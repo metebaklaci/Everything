@@ -1,0 +1,1 @@
+g++ emulatorcopy.cpp evaluationcopy.cpp play2048copy.cpp minimaxcopy.cpp -o game

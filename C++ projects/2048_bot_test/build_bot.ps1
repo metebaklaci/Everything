@@ -1,0 +1,1 @@
+g++ emulator.cpp evaluation.cpp bot.cpp minimax.cpp -o bot

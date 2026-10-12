@@ -1,0 +1,1 @@
+g++ play.cpp gridmanager.cpp -o play
